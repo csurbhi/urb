@@ -132,6 +132,33 @@ static struct extent *lsdm_rb_prev(struct extent *e)
         return (node == NULL) ? NULL : container_of(node, struct extent, rb);
 }
 
+/* Check if we can be merged with the left or the right node */
+static struct extent *merge(struct extent *e)
+{
+	struct extent *prev, *next;
+
+	prev = lsdm_rb_prev(e);
+	next = lsdm_rb_next(e);
+	if (prev) {
+		if(prev->lba + prev->len == e->lba) {
+			if (prev->pba + prev->len == e->pba) {
+				prev->len += e->len;
+				free(e);
+				e = prev;
+			}
+		}
+	}
+	if (next) {
+		if (next->lba == e->lba + e->len) {
+			if (next->pba == e->pba + e->len) {
+				e->len += next->len;
+				lsdm_rb_remove(next);
+				free(next);
+			}
+		}
+	}
+}
+
 /* Update mapping. Removes any total overlaps, edits any partial
  * overlaps, adds new extent to map.
  */
@@ -234,6 +261,7 @@ static int lsdm_update_range(sector_t lba, sector_t pba, size_t len)
 		}
 		if (!e || (e->lba > lba + len))  {
 			lsdm_rb_insert(new);
+			merge(new);
 			break;
 		}
 		/* else fall down to the next case for the last
@@ -259,6 +287,7 @@ static int lsdm_update_range(sector_t lba, sector_t pba, size_t len)
 			e->pba = e->pba + diff;
 			lsdm_rb_insert(new);
 			lsdm_rb_insert(e);
+			merge(new);
 			break;
 		}
 
@@ -276,6 +305,7 @@ static int lsdm_update_range(sector_t lba, sector_t pba, size_t len)
 			}
 			// else
 			lsdm_rb_insert(new);
+			merge(new);
 			break;
 		}
 
@@ -297,6 +327,7 @@ static int lsdm_update_range(sector_t lba, sector_t pba, size_t len)
 			}
 			// else
 			lsdm_rb_insert(new);
+			merge(new);
 			break;
 		}
 		/* If you are here then you haven't covered some
@@ -1582,6 +1613,15 @@ int trio[][3] = {
 {8208, 1671320, 8},
 };
 
+void overwrite()
+{
+	for(int i=0; i<1166; i++) {
+		printf("\n %d %d %d ", trio[i][0], trio[i][1], trio[i][2]);
+		lsdm_update_range(trio[i][0], trio[i][1], trio[i][2]);
+	}
+	start_printing();
+}
+
 int main(void)
 {
 	int i, j;
@@ -1596,5 +1636,7 @@ int main(void)
 	}
 	start_printing();
 	getchar();
+
+	overwrite();
 	return 0; /* Fail will directly unload the module */
 }
