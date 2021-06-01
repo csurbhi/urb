@@ -1,5 +1,4 @@
-/*
- * Author : Muhammad Falak R Wani (mfrw)
+ /* Author : Muhammad Falak R Wani (mfrw)
  * This program is adapted from the linux kernel and in no way,
  * I claim I have any copyright.
  */
@@ -133,126 +132,6 @@ static struct extent *lsdm_rb_prev(struct extent *e)
         return (node == NULL) ? NULL : container_of(node, struct extent, rb);
 }
 
-static int split_delete_overlapping_nodes(sector_t lba, sector_t pba, size_t len)
-{
-	struct extent *e = NULL;
-	struct extent *tmp = NULL;
-	struct rb_node *node = extent_tbl_root.rb_node;  /* top of the tree */
-	int diff = 0;
-
-	assert(len != 0);
-	while (node) {
-		e = rb_entry(node, struct extent, rb);
-		/* No overlap */
-		if (lba + len < e->lba) {
-			node = node->rb_left;
-			continue;
-		}
-		if (lba > e->lba + e->len) {
-			node = node->rb_right;
-			continue;
-		}
-		/* new overlaps with e
-		 * new: ++++
-		 * e: --
-		 */
-
-		/*  Case 1: Exact length, complete overwrite.
-		 *
-		 * Replace the old node: same lba but different pba
-		 * and same length
-		 *
-		 * 	++++++++
-		 * 	--------
-		 */
-
-		if ((lba == e->lba) && (len = e->len)) {
-			/* we already merged the node, so this
-			 * overlapping node is extra!
-			 */
-			/*
-			lsdm_rb_remove(e);
-			free(e);
-			*/
-			assert(1);
-		}
-
-		/* 
-		 * Case 2: Overwrites an existing extent partially;
-		 * covers only the right portion of an extent.
-		 * (++ merged on the right side)
-		 *
-		 * 		+++++++++++
-		 * ---------------
-		 *
-		 */
-		if ((lba > e->lba) && (lba < e->lba + e->len)) {
-			diff = (e->lba + e->len) - lba;
-			e->len = e->len - diff;
-			/* we don't add any new node as that new node
-			 * was merged with the neighboring node
-			 */
-			break;
-		}
-
-		/* 
-		 * Case 4: Overwrite many extents completely
-		 *	++++++++++++++++++++
-		 *	  ----- ------  --------
-		 *
-		 * Could also be exact same: 
-		 * 	+++++
-		 * 	-----
-		 * But this case is optimized in case 1.
-		 * We need to remove all such e
-		 * the last e can have case 1
-		 *
-		 * here we compare left ends and right ends of 
-		 * new and existing node e
-		 *
-		 * +++ could have been merged on either the left or
-		 * right side.
-		 */
-		while ((e!=NULL) && (lba <= e->lba) && ((lba + len) >= (e->lba + e->len))) {
-			tmp = lsdm_rb_next(e);
-			lsdm_rb_remove(e);
-			free(e);
-			e = tmp;
-		}
-		if (!e || (e->lba > lba + len))  {
-			break;
-		}
-		/* else fall down to the next case for the last
-		 * component that overwrites an extent partially
-		 */
-
-		/* 
-		 * Case 5: 
-		 * Partially overwrite an extent
-		 *
-		 * (++ merged on the left side)
-		 *
-		 * ++++++++++
-		 * 	-------------- OR
-		 *
-		 * Left end matches!
-		 * +++++++
-		 * --------------
-		 *
-		 */
-		if ((lba <= e->lba) && (lba + len > e->lba)) {
-			diff = lba + len - e->lba;
-			e->lba = e->lba + diff;
-			e->len = e->len - diff;
-			e->pba = e->pba + diff;
-			break;
-		}
-	}
-	return 0;
-}
-
-
-
 /* Update mapping. Removes any total overlaps, edits any partial
  * overlaps, adds new extent to map.
  */
@@ -262,7 +141,6 @@ static int lsdm_update_range(sector_t lba, sector_t pba, size_t len)
 	struct extent *tmp = NULL;
 	struct rb_node *node = extent_tbl_root.rb_node;  /* top of the tree */
 	int diff = 0;
-	int i = 0;
 
 	assert(len != 0);
 
@@ -273,12 +151,6 @@ static int lsdm_update_range(sector_t lba, sector_t pba, size_t len)
 	}
 	extent_init(new, lba, pba, len);
 	while (node) {
-		i++;
-		if (i > 150) {
-			printf("\n Stuck in while loop ");
-			break;
-		}
-			
 		e = rb_entry(node, struct extent, rb);
 		/* No overlap */
 		if (lba + len < e->lba) {
@@ -289,128 +161,9 @@ static int lsdm_update_range(sector_t lba, sector_t pba, size_t len)
 			node = node->rb_right;
 			continue;
 		}
-		/* no overlap, but sequential node; MERGE this new
-		* node with existing node!
-		*
-		* Note that lsdm_update_range is called asynchronously
-		* and so may not be called sequentially!
-		* 
-		* Merge on the left!
-		*/
-		if (lba + len == e->lba) {
-			if (pba + len == e->pba) {
-				//printk(KERN_ERR "\n New node merged! ");
-				lsdm_rb_remove(e);
-				e->len += len;
-				e->lba = lba;
-				e->pba = pba;
-				lsdm_rb_insert(e);
-				free(new);
-				prev = lsdm_rb_prev(e);
-				if (!prev)
-					break;
-				/* No overlap! */
-				if (prev->lba + prev->len < e->lba)
-					break;
-				/* Merge previous node too */
-				if (prev->lba + prev->len == e->lba) {
-					if (prev->pba + prev->len == prev->pba) {
-						prev->len = prev->len + e->len;
-						lsdm_rb_remove(e);
-						free(e);
-						break;
-					}
-					/* no overlap case */
-					break;
-				} 
-			        /* The new lba is merged, but the next
-				 * extent[s] overlap[s] with LBA, PBA, len
-				 */
-				split_delete_overlapping_nodes(lba, pba, len);
-				break;
-			}
-			/* else we cannot merge as physically
-			* discontiguous
-			*/
-			node = node->rb_left;
-			continue;
-		}
-
-		/* Merging on the right */
-
-		if (lba == e->lba + e->len) {
-			if (pba == e->pba + e->len) {
-				e->len = e->len + len;
-				//printk(KERN_ERR "\n New node merged! ");
-				free(new);
-				next = lsdm_rb_next(e);
-				/* No overlap with next extent */
-				if (!next)
-					break;
-				if (next->lba > e->lba + e->len)
-					break;
-				if (next->lba == e->lba + e->len) {
-			            if (next->pba == e->pba + e->len) {
-					e->len = e->len + next->len;
-					lsdm_rb_remove(next);
-					free(next);
-					break;
-				    }
-				    /* no overlap */
-				    break;
-				}
-			        /* The new lba is merged, but the next
-				 * extent[s] overlap[s] with LBA, PBA, len
-				 */
-				split_delete_overlapping_nodes(lba, pba, len);
-				break;
-			}
-			/* else we cannot merge as physically
-			 * discontiguous
-			 */
-			node = node->rb_right;
-			continue;
-		}
-		/* new overlaps with e
-		 * new: ++++
-		 * e: --
-		 */
-
-		/*  Case 1: Exact length, complete overwrite.
-		 *
-		 * Replace the old node: same lba but different pba
-		 * and same length
-		 *
-		 * 	++++++++
-		 * 	--------
-		 */
-
-		if ((lba == e->lba) && (len = e->len)) {
-			/*  Since the lba/key doesnt change we dont
-			 *  have to do anything to rebalance the tree
-			 */
-			e->pba = pba;
-			free(new);
-			break;
-		}
-
-		/* 
-		 * Case 2: Overwrites an existing extent partially;
-		 * covers only the right portion of an extent.
-		 *
-		 * 		+++++++++++
-		 * ---------------
-		 *
-		 */
-		if ((lba > e->lba) && (lba < e->lba + e->len)) {
-			diff = (e->lba + e->len) - lba;
-			e->len = e->len - diff;
-			lsdm_rb_insert(new);
-			break;
-		}
 
 		 /*
-		 * Case 3: overwrite a part of the existing extent
+		 * Case 1: overwrite a part of the existing extent
 		 * 	++++++++++
 		 * ----------------------- 
 		 *
@@ -436,7 +189,30 @@ static int lsdm_update_range(sector_t lba, sector_t pba, size_t len)
 
 
 		/* 
-		 * Case 4: Overwrite many extents completely
+		 * Case 2: Overwrites an existing extent partially;
+		 * covers only the right portion of an existing extent (e1)
+		 * Right end of e1 does not match with "+"
+		 *
+		 * 		+++++++++++++++++++++
+		 * ---------------   --------    -----------
+		 *  e1			e2	e3
+		 *
+		 */
+		if ((lba > e->lba) && (lba < e->lba + e->len)) {
+			diff = (e->lba + e->len) - lba;
+			e->len = e->len - diff;
+			e = lsdm_rb_next(e);
+			if (!e)
+				break;
+			/*  
+			 *  process the next overlapping segments!
+			 *  Fall through to the next case.
+			 */
+		}
+
+
+		/* 
+		 * Case 3: Overwrite many extents completely
 		 *	++++++++++++++++++++
 		 *	  ----- ------  --------
 		 *
@@ -465,24 +241,71 @@ static int lsdm_update_range(sector_t lba, sector_t pba, size_t len)
 		 */
 
 		/* 
-		 * Case 5: 
+		 * Case 4: 
 		 * Partially overwrite an extent
 		 * ++++++++++
 		 * 	-------------- OR
 		 *
-		 * Left end matches!
+		 * Left end of + and - matches!
 		 * +++++++
 		 * --------------
 		 *
 		 */
 		if ((lba <= e->lba) && (lba + len > e->lba)) {
 			diff = lba + len - e->lba;
+			lsdm_rb_remove(e);
 			e->lba = e->lba + diff;
 			e->len = e->len - diff;
 			e->pba = e->pba + diff;
 			lsdm_rb_insert(new);
+			lsdm_rb_insert(e);
 			break;
 		}
+
+		/* Case 5 
+		 * 	    +++++++++
+		 * ---------
+		 *  Right end of - matches left end of +
+		 *  Merge if the pba matches.
+		 */
+		if (e->lba + e->len == lba) {
+			if(e->pba + e->len == pba) {
+				e->len += len;
+				free(new);
+				break;
+			}
+			// else
+			lsdm_rb_insert(new);
+			break;
+		}
+
+		/* Case 6
+		 *
+		 * Left end of - matches with right end of +
+		 * +++++++
+		 *        ---------
+		 */
+		if (lba + len == e->lba) {
+			if (pba + len == e->pba) {
+				len += e->len;
+				lsdm_rb_remove(e);
+				e->lba = lba;
+				e->pba = pba;
+				e->len = len;
+				lsdm_rb_insert(e);
+				break;
+			}
+			// else
+			lsdm_rb_insert(new);
+			break;
+		}
+		/* If you are here then you haven't covered some
+		 * case!
+		 */
+		printf("\n why are you here ?");
+		printf("\n %s lba: %d, pba: %d, len:%ld ", __func__, lba, pba, len);
+		printf("\n %s e->lba: %d, e->pba: %d, e->len:%d ", __func__, e->lba, e->pba, e->len);
+		exit(-1);
 	}
 	if (!node) {
 		/* new node has to be added */
