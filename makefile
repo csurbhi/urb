@@ -1,13 +1,14 @@
-CFLAGS = -g -O2
+CFLAGS = -g -O2 -fPIC
+LDFLAGS= -Wl,-R -Wl,`$PWD`
 
 rbtest: liburb.so rbtree_test.o
-	gcc $(CFLAGS) -L. -o rbtest rbtree_test.o -lurb
+	gcc $(CFLAGS) -L . -o rbtest rbtree_test.o -lurb
 
 liburb.so: rbtree.o
 	gcc -shared -o liburb.so rbtree.o
 
 rbtree.o: rbtree.c rbtree.h rbtree_augmented.h
-	gcc $(CFLAGS) -c -Wall -Werror -fpic rbtree.c
+	gcc $(CFLAGS) -c -Wall -Werror rbtree.c
 
 rbtree_test.o: rbtree_test.c rbtree.h rbtree_augmented.h
 
