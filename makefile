@@ -1,8 +1,11 @@
-CFLAGS = -g -O2 -fPIC
+CFLAGS = -g -O0 -fPIC
 LDFLAGS= -Wl,-R -Wl,`$PWD`
+-LFLAGS+= -L /home/csurbhi/github/userspace-rbtree/urb
+LIBS= -lurb
+OBJS= rbtree_test.o
 
 rbtest: liburb.so rbtree_test.o
-	gcc $(CFLAGS) -L . -o rbtest rbtree_test.o -lurb
+	gcc $(CFLAGS) -L . -o rbtest rbtree_test.o $(LIBS)
 
 liburb.so: rbtree.o
 	gcc -shared -o liburb.so rbtree.o

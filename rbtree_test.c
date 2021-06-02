@@ -16,7 +16,7 @@
 #include<string.h>
 
 
-#define NODES       100
+#define NODES       2000
 #define PERF_LOOPS  100
 #define CHECK_LOOPS 10
 
@@ -143,6 +143,7 @@ static struct extent *merge(struct extent *e)
 		if(prev->lba + prev->len == e->lba) {
 			if (prev->pba + prev->len == e->pba) {
 				prev->len += e->len;
+				lsdm_rb_remove(e);
 				free(e);
 				e = prev;
 			}
@@ -168,16 +169,25 @@ static int lsdm_update_range(sector_t lba, sector_t pba, size_t len)
 	struct extent *tmp = NULL;
 	struct rb_node *node = extent_tbl_root.rb_node;  /* top of the tree */
 	int diff = 0;
+	int i=0;
 
 	assert(len != 0);
 
-	printf("\n %s lba: %d, pba: %d, len:%ld ", __func__, lba, pba, len);
+	//printf("\n %s lba: %d, pba: %d, len:%ld ", __func__, lba, pba, len);
 	new = malloc(sizeof(struct extent ));
 	if (unlikely(!new)) {
 		return -ENOMEM;
 	}
 	extent_init(new, lba, pba, len);
 	while (node) {
+		i++;
+		if (i==150) {
+			printf("\n why are you here ?");
+			printf("\n %s lba: %d, pba: %d, len:%ld ", __func__, lba, pba, len);
+			printf("\n %s e->lba: %d, e->pba: %d, e->len:%d ", __func__, e->lba, e->pba, e->len);
+			printf("\n");
+			exit(-1);
+		}
 		e = rb_entry(node, struct extent, rb);
 		/* No overlap */
 		if (lba + len < e->lba) {
@@ -206,7 +216,7 @@ static int lsdm_update_range(sector_t lba, sector_t pba, size_t len)
 			diff =  lba - e->lba;
 			/* new should be physically discontiguous
 			 */
-			assert(e->pba + diff !=  pba);
+			//assert(e->pba + diff !=  pba);
 			e->len = diff;
 			lsdm_rb_insert(new);
 			extent_init(split, lba + len, e->pba + (diff + len), e->len - (diff + len));
@@ -222,20 +232,45 @@ static int lsdm_update_range(sector_t lba, sector_t pba, size_t len)
 		 *
 		 * 		+++++++++++++++++++++
 		 * ---------------   --------    -----------
-		 *  e1			e2	e3
+		 *  e1			e2	e3 
 		 *
 		 */
 		if ((lba > e->lba) && (lba < e->lba + e->len)) {
 			diff = (e->lba + e->len) - lba;
 			e->len = e->len - diff;
 			e = lsdm_rb_next(e);
-			if (!e)
-				break;
 			/*  
 			 *  process the next overlapping segments!
 			 *  Fall through to the next case.
 			 */
 		}
+		/* else if
+		 * (lba > e->lba) && (lba > e->lba + e->len)
+		 *
+		 *	++++++++++++++++
+		 * ------------
+		 *
+		 *  else if 
+		 *  (lba < e->lba) &&  (lba > e->lba + e->len)
+		 *   
+		 *   +++++++++++++
+		 *   	-----
+		 *   
+		 *
+		 *  else
+		 *  (lba < e->lba) && (lba < e->lba + e->len)
+		 *  
+		 *  ++++++++
+		 *   ----
+		 *  or 
+		 *
+		 *  +++++++
+		 *    --------
+		 *
+		 * All these cases are taken care of in different
+		 * cases.
+		 *
+		 */
 
 
 		/* 
@@ -336,6 +371,7 @@ static int lsdm_update_range(sector_t lba, sector_t pba, size_t len)
 		printf("\n why are you here ?");
 		printf("\n %s lba: %d, pba: %d, len:%ld ", __func__, lba, pba, len);
 		printf("\n %s e->lba: %d, e->pba: %d, e->len:%d ", __func__, e->lba, e->pba, e->len);
+		printf("\n");
 		exit(-1);
 	}
 	if (!node) {
@@ -444,7 +480,7 @@ static void check_augmented(int nr_nodes)
 	}
 }
 
-int trio[][3] = {
+sector_t trio[][3] = {
 {39321472, 1048576, 128},
 {10264, 1050752, 2048},
 {8216, 1048704, 2048},
@@ -1613,10 +1649,13 @@ int trio[][3] = {
 {8208, 1671320, 8},
 };
 
+
+#define NUM 1066
+
 void overwrite()
 {
-	for(int i=0; i<1166; i++) {
-		printf("\n %d %d %d ", trio[i][0], trio[i][1], trio[i][2]);
+	for(int i=0; i<NUM; i++) {
+		//printf("\n %d %d %d ", trio[i][0], trio[i][1], trio[i][2]);
 		lsdm_update_range(trio[i][0], trio[i][1], trio[i][2]);
 	}
 	start_printing();
@@ -1630,8 +1669,8 @@ int main(void)
 	
 	printf("rbtree testing\n");
 
-	for(i=0; i<1166; i++) {
-		printf("\n %d %d %d ", trio[i][0], trio[i][1], trio[i][2]);
+	for(i=0; i<NUM; i++) {
+		//printf("\n %d %d %d ", trio[i][0], trio[i][1], trio[i][2]);
 		lsdm_update_range(trio[i][0], trio[i][1], trio[i][2]);
 	}
 	start_printing();
