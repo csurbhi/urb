@@ -218,6 +218,31 @@ static struct extent *merge(struct extent *e)
 }
 
 
+int check_no_overlap(struct extent * new)
+{
+	struct rb_node *node = extent_tbl_root.rb_node;  /* top of the tree */
+	struct extent *e = NULL, *next;
+
+	if (!node)
+		return 0;
+
+	/* Start from the smallest node that overlaps*/
+	for (node = rb_first(&extent_tbl_root); node; node = rb_next(node)) {
+		next = rb_entry(node, struct extent, rb);
+		printf("\n lba: %d pba: %d len: %d ", next->lba, next->pba, next->len);
+		if (next->lba >= (new->lba + new->len))
+			break;
+		e = next;
+	}
+	if (!e)
+		return 0;
+
+	if((e->lba + e->len) <= new->lba) 
+		/* does not overlap */
+		return 0;
+	else
+		return -1;
+}
 
 
 int _stl_verbose;
@@ -230,6 +255,13 @@ static int lsdm_rb_insert(struct extent *new)
 
 	RB_CLEAR_NODE(&new->rb);
 
+	ret = check_no_overlap(new);
+	if (ret < 0)
+		return ret;
+
+	printf("\n checked okay!");
+
+
 	/* Go to the bottom of the tree */
 	while (*link) {
 		parent = *link;
@@ -241,21 +273,10 @@ static int lsdm_rb_insert(struct extent *new)
 		} else {
 			/* overlapping indicates (new->lba >= e->lba)
 			 */
-			if ((new->pba >= e->pba) && (new->pba <= e->pba + e->len)) {
-				printf("\n Overlapping node found 1!");
-				printf("\n e->lba: %d e->pba: %d e->len: %d", e->lba, e->pba, e->len);
-				printf("\n new->lba: %d new->pba: %d new->len: %d \n", new->lba, new->pba, new->len);
-				exit(-1);
-			}
-			if ((new->pba <= e->pba) && ((new->pba + new->len) > e->pba)) {
 				printf("\n Overlapping node found 2!");
 				printf("\n e->lba: %d e->pba: %d e->len: %d", e->lba, e->pba, e->len);
 				printf("\n new->lba: %d new->pba: %d new->len: %d \n", new->lba, new->pba, new->len);
 				exit(-1);
-			}
-			printf("\n e->lba: %d e->pba: %d e->len: %d", e->lba, e->pba, e->len);
-			printf("\n new->lba: %d new->pba: %d new->len: %d \n", new->lba, new->pba, new->len);
-			link = &(*link)->rb_right;
 		}
 	}
 	/* Put the new node there */
@@ -290,6 +311,7 @@ static int lsdm_update_range(sector_t lba, sector_t pba, int len)
 	assert(len != 0);
 
 	//printf("\n %s lba: %d, pba: %d, len:%ld ", __func__, lba, pba, len);
+	printf("\n ---------------------\n");
 	new = malloc(sizeof(struct extent ));
 	if (unlikely(!new)) {
 		return -ENOMEM;
@@ -375,14 +397,17 @@ static int lsdm_update_range(sector_t lba, sector_t pba, int len)
 		return 0;
 	}
 
+	printf ("\n e->lba: %d e->pba: %d e->len: %d ", e->lba, e->pba, e->len);
 	/* Start from the smallest node that overlaps*/
-	prev = lsdm_rb_prev(e);
-	while(prev) {
+	while(1) {
+		prev = lsdm_rb_prev(e);
+		if (!prev)
+			break;
 		if (prev->lba + prev->len <= lba)
 			break;
-		prev = lsdm_rb_prev(e);
 		e = prev;
 	}
+	printf ("\n e->lba: %d e->pba: %d e->len: %d ", e->lba, e->pba, e->len);
 
 	/* Now we consider the overlapping "e's" in an order of
 	 * increasing LBA
@@ -402,9 +427,10 @@ static int lsdm_update_range(sector_t lba, sector_t pba, int len)
 	 * (Right end of e1 and + could match!)  
 	 *
 	 */
-	if ((lba > e->lba) && ((lba + len) >= (e->lba + e->len))) {
+	if ((lba > e->lba) && ((lba + len) >= (e->lba + e->len)) && (lba < (e->lba + e->len))) {
 		e->len = lba - e->lba;
 		e = lsdm_rb_next(e);
+		flag = 1;
 		/*  
 		 *  process the next overlapping segments!
 		 *  Fall through to the next case.
