@@ -445,9 +445,7 @@ static int lsdm_update_range(sector_t lba, sector_t pba, int len)
 	 * Could also be exact same: 
 	 * 	+++++
 	 * 	-----
-	 * But this case is optimized in case 1.
 	 * We need to remove all such e
-	 * the last e can have case 1
 	 *
 	 * here we compare left ends and right ends of 
 	 * new and existing node e
@@ -505,28 +503,6 @@ static int lsdm_update_range(sector_t lba, sector_t pba, int len)
 		ret = lsdm_rb_insert(e);
 		if (ret < 0) {
 			printf("\n Corruption in case 4!! ");
-			printf ("\n lba: %d pba: %d len: %d ", lba, pba, len);
-			printf ("\n e->lba: %d e->pba: %d e->len: %d ", e->lba, e->pba, e->len);
-			printf("\n");
-			exit(-1);
-		}
-		return(0);
-	}
-
-	/* Case 5:
-	 *
-	 * Right end of + and - matches.
-	 *
-	 *  		+++++++++
-	 * ----------------------
-	 */
-	if ((lba > e->lba) && (lba + len == e->lba + e->len)) {
-		printf("\n case5 ! e->lba: %d e->pba: %d e->len: %d", e->lba, e->pba, e->len);
-		diff = e->lba - lba;
-		e->len = diff;
-		ret = lsdm_rb_insert(new);
-		if (ret < 0) {
-			printf("\n Corruption in case 5!! ");
 			printf ("\n lba: %d pba: %d len: %d ", lba, pba, len);
 			printf ("\n e->lba: %d e->pba: %d e->len: %d ", e->lba, e->pba, e->len);
 			printf("\n");
