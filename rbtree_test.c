@@ -233,9 +233,28 @@ static int lsdm_rb_insert(struct extent *new)
 	/* Go to the bottom of the tree */
 	while (*link) {
 		parent = *link;
-		if (new->lba < rb_entry(parent, struct extent, rb)->lba) {
+		e = rb_entry(parent, struct extent, rb);
+		if ((new->lba + new->len) <= e->lba) {
 			link = &(*link)->rb_left;
+		} else if (new->lba >= (e->lba + e->len)){
+			link = &(*link)->rb_right;
 		} else {
+			/* overlapping indicates (new->lba >= e->lba)
+			 */
+			if ((new->pba >= e->pba) && (new->pba <= e->pba + e->len)) {
+				printf("\n Overlapping node found 1!");
+				printf("\n e->lba: %d e->pba: %d e->len: %d", e->lba, e->pba, e->len);
+				printf("\n new->lba: %d new->pba: %d new->len: %d \n", new->lba, new->pba, new->len);
+				exit(-1);
+			}
+			if ((new->pba <= e->pba) && ((new->pba + new->len) > e->pba)) {
+				printf("\n Overlapping node found 2!");
+				printf("\n e->lba: %d e->pba: %d e->len: %d", e->lba, e->pba, e->len);
+				printf("\n new->lba: %d new->pba: %d new->len: %d \n", new->lba, new->pba, new->len);
+				exit(-1);
+			}
+			printf("\n e->lba: %d e->pba: %d e->len: %d", e->lba, e->pba, e->len);
+			printf("\n new->lba: %d new->pba: %d new->len: %d \n", new->lba, new->pba, new->len);
 			link = &(*link)->rb_right;
 		}
 	}
@@ -471,6 +490,7 @@ static int lsdm_update_range(sector_t lba, sector_t pba, int len)
 		e->lba = e->lba + diff;
 		e->len = e->len - diff;
 		e->pba = e->pba + diff;
+		printf("\n e snipped! e->lba: %d e->pba: %d e->len: %d", e->lba, e->pba, e->len);
 		ret = lsdm_rb_insert(new);
 		if (ret < 0) {
 			printf("\n Corruption in case 4!! ");
