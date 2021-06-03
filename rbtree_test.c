@@ -260,6 +260,8 @@ static int lsdm_update_range(sector_t lba, sector_t pba, int len)
 	struct extent *e = NULL, *new = NULL, *split = NULL, *next=NULL, *prev=NULL;
 	struct extent *tmp = NULL;
 	struct rb_node *node = extent_tbl_root.rb_node;  /* top of the tree */
+	struct rb_node *left;
+	struct extent *e_left;
 	int diff = 0;
 	int i=0;
 	int ret=0;
@@ -285,284 +287,17 @@ static int lsdm_update_range(sector_t lba, sector_t pba, int len)
 		}
 		e = rb_entry(node, struct extent, rb);
 		/* No overlap */
-		if (lba + len < e->lba) {
+		if ((lba + len) <= e->lba) {
 			node = node->rb_left;
 			continue;
 		}
-		if (lba > e->lba + e->len) {
+		if (lba >= (e->lba + e->len)) {
 			node = node->rb_right;
 			continue;
 		}
-		printf("\n Here! e->lba: %d e->pba: %d e->len: %d", e->lba, e->pba, e->len);
-
-		 /*
-		 * Case 1: overwrite a part of the existing extent
-		 * 	++++++++++
-		 * ----------------------- 
-		 *
-		 *  No end matches!!
-		 */
-
-		if ((lba > e->lba)  && (lba + len < e->lba + e->len)) {
-			printf("\n case1 ! e->lba: %d e->pba: %d e->len: %d", e->lba, e->pba, e->len);
-			split = malloc(sizeof(struct extent));
-			if (!split) {
-				free(new);
-				return -ENOMEM;
-			}
-			diff =  lba - e->lba;
-			/* new should be physically discontiguous
-			 */
-			//assert(e->pba + diff !=  pba);
-			e->len = diff;
-			ret = lsdm_rb_insert(new);
-			if (ret < 0) {
-				printf ("\n lba: %d pba: %d len: %d ", lba, pba, len);
-				printf ("\n e->lba: %d e->pba: %d e->len: %d ", e->lba, e->pba, e->len);
-				printf("\n");
-				exit(-1);
-			}
-			extent_init(split, lba + len, e->pba + (diff + len), e->len - (diff + len));
-			ret = lsdm_rb_insert(split);
-			if (ret < 0) {
-				printf("\n Corruption in case 1!! ");
-				printf ("\n lba: %d pba: %d len: %d ", lba, pba, len);
-				printf ("\n e->lba: %d e->pba: %d e->len: %d ", e->lba, e->pba, e->len);
-				printf ("\n split->lba: %d split->pba: %d split->len: %d ", split->lba, split->pba, split->len);
-				printf("\n");
-				exit(-1);
-			}
-
-			break;
-		}
-
-
-		/* 
-		 * Case 2: Overwrites an existing extent partially;
-		 * covers only the right portion of an existing extent (e1)
-		 * Right end of e1 does not match with "+"
-		 *
-		 * 		+++++++++++++++++++++
-		 * ---------------   --------    -----------
-		 *  e1			e2	e3 
-		 *
-		 */
-		if ((lba > e->lba) && (lba < e->lba + e->len)) {
-			printf("\n case2 ! e->lba: %d e->pba: %d e->len: %d", e->lba, e->pba, e->len);
-			diff = (e->lba + e->len) - lba;
-			printf("\n diff: %d ", diff);
-			printf("\n lba: %d, len: %d  e->lba: %d e->len: %d", lba, len, e->lba, e->len);
-			memcpy(&olde, e, sizeof(struct extent));
-			printf("\n e->len: %d ,  diff: %d", e->len, diff);
-			e->len = e->len - diff;
-			printf("\n lba: %d, len: %d  e->lba: %d e->len: %d", lba, len, e->lba, e->len);
-			e = lsdm_rb_next(e);
-			printf("\n lba: %d, len: %d  e->lba: %d e->len: %d", lba, len, e->lba, e->len);
-			e = lsdm_rb_prev(e);
-			printf("\n lba: %d, len: %d  e->lba: %d e->len: %d", lba, len, e->lba, e->len);
-			e = lsdm_rb_next(e);
-			flag = 1;
-			/*  
-			 *  process the next overlapping segments!
-			 *  Fall through to the next case.
-			 */
-		}
-		/* else if
-		 * (lba > e->lba) && (lba > e->lba + e->len)
-		 *
-		 *	++++++++++++++++
-		 * ------------
-		 *
-		 *  else if 
-		 *  (lba < e->lba) &&  (lba > e->lba + e->len)
-		 *   
-		 *   +++++++++++++
-		 *   	-----
-		 *   
-		 *
-		 *  else
-		 *  (lba < e->lba) && (lba < e->lba + e->len)
-		 *  
-		 *  ++++++++
-		 *   ----
-		 *  or 
-		 *
-		 *  +++++++
-		 *    --------
-		 *
-		 * All these cases are taken care of in different
-		 * cases.
-		 *
-		 */
-
-
-		/* 
-		 * Case 3: Overwrite many extents completely
-		 *	++++++++++++++++++++
-		 *	  ----- ------  --------
-		 *
-		 * Could also be exact same: 
-		 * 	+++++
-		 * 	-----
-		 * But this case is optimized in case 1.
-		 * We need to remove all such e
-		 * the last e can have case 1
-		 *
-		 * here we compare left ends and right ends of 
-		 * new and existing node e
-		 */
-		while ((e!=NULL) && (lba <= e->lba) && ((lba + len) >= (e->lba + e->len))) {
-			printf("\n case3 ! e->lba: %d e->pba: %d e->len: %d", e->lba, e->pba, e->len);
-			tmp = lsdm_rb_next(e);
-			lsdm_rb_remove(e);
-			free(e);
-			e = tmp;
-		}
-		if (!e || (e->lba > lba + len))  {
-			ret = lsdm_rb_insert(new);
-			if (ret < 0) {
-				printf("\n Corruption in case 3!! ");
-				printf ("\n lba: %d pba: %d len: %d ", lba, pba, len);
-				printf ("\n e->lba: %d e->pba: %d e->len: %d ", e->lba, e->pba, e->len);
-				printf("\n");
-				exit(-1);
-			}
-			break;
-		}
-		/* else fall down to the next case for the last
-		 * component that overwrites an extent partially
-		 */
-
-		/* 
-		 * Case 4: 
-		 * Partially overwrite an extent
-		 * ++++++++++
-		 * 	-------------- OR
-		 *
-		 * Left end of + and - matches!
-		 * +++++++
-		 * --------------
-		 *
-		 */
-		if ((lba <= e->lba) && (lba + len > e->lba)) {
-			printf("\n case4 ! e->lba: %d e->pba: %d e->len: %d", e->lba, e->pba, e->len);
-			diff = lba + len - e->lba;
-			lsdm_rb_remove(e);
-			e->lba = e->lba + diff;
-			e->len = e->len - diff;
-			e->pba = e->pba + diff;
-			ret = lsdm_rb_insert(new);
-			if (ret < 0) {
-				printf("\n Corruption in case 4!! ");
-				printf ("\n lba: %d pba: %d len: %d ", lba, pba, len);
-				printf ("\n e->lba: %d e->pba: %d e->len: %d ", e->lba, e->pba, e->len);
-				printf("\n");
-				exit(-1);
-			}
-			ret = lsdm_rb_insert(e);
-			if (ret < 0) {
-				printf("\n Corruption in case 4!! ");
-				printf ("\n lba: %d pba: %d len: %d ", lba, pba, len);
-				printf ("\n e->lba: %d e->pba: %d e->len: %d ", e->lba, e->pba, e->len);
-				printf("\n");
-				exit(-1);
-			}
-			break;
-		}
-
-		/* Case 5:
-		 *
-		 * Right end of + and - matches.
-		 *
-		 *  		+++++++++
-		 * ----------------------
-		 */
-		if ((lba > e->lba) && (lba + len == e->lba + e->len)) {
-			printf("\n case5 ! e->lba: %d e->pba: %d e->len: %d", e->lba, e->pba, e->len);
-			diff = e->lba - lba;
-			e->len = diff;
-			ret = lsdm_rb_insert(new);
-			if (ret < 0) {
-				printf("\n Corruption in case 5!! ");
-				printf ("\n lba: %d pba: %d len: %d ", lba, pba, len);
-				printf ("\n e->lba: %d e->pba: %d e->len: %d ", e->lba, e->pba, e->len);
-				printf("\n");
-				exit(-1);
-			}
-			break;
-		}
-
-		/* Case 6 
-		 * 	    +++++++++
-		 * ---------
-		 *  Right end of - matches left end of +
-		 *  Merge if the pba matches.
-		 */
-		if (e->lba + e->len == lba) {
-			printf("\n case6 ! e->lba: %d e->pba: %d e->len: %d", e->lba, e->pba, e->len);
-			if(e->pba + e->len == pba) {
-				e->len += len;
-				free(new);
-				break;
-			}
-			// else
-			ret = lsdm_rb_insert(new);
-			if (ret < 0) {
-				printf("\n Corruption in case 6!! ");
-				printf ("\n lba: %d pba: %d len: %d ", lba, pba, len);
-				printf ("\n e->lba: %d e->pba: %d e->len: %d ", e->lba, e->pba, e->len);
-				printf("\n");
-				exit(-1);
-			}
-			break;
-		}
-
-		/* Case 7
-		 *
-		 * Left end of - matches with right end of +
-		 * +++++++
-		 *        ---------
-		 */
-		if (lba + len == e->lba) {
-			printf("\n case7 ! e->lba: %d e->pba: %d e->len: %d", e->lba, e->pba, e->len);
-			if (pba + len == e->pba) {
-				len += e->len;
-				lsdm_rb_remove(e);
-				e->lba = lba;
-				e->pba = pba;
-				e->len = len;
-				ret = lsdm_rb_insert(e);
-				if (ret < 0) {
-					printf("\n Corruption in case 7.1!! ");
-					printf ("\n lba: %d pba: %d len: %d ", lba, pba, len);
-					printf ("\n e->lba: %d e->pba: %d e->len: %d ", e->lba, e->pba, e->len);
-					printf("\n");
-					exit(-1);
-				}
-				break;
-			}
-			// else
-			ret = lsdm_rb_insert(new);
-			if (ret < 0) {
-				printf("\n Corruption in case 7.2!! ");
-				printf ("\n lba: %d pba: %d len: %d ", lba, pba, len);
-				printf ("\n e->lba: %d e->pba: %d e->len: %d ", e->lba, e->pba, e->len);
-				printf("\n");
-				exit(-1);
-			}
-			break;
-		}
-		/* If you are here then you haven't covered some
-		 * case!
-		 */
-		printf("\n why are you here ? flag: %d", flag);
-		printf("\n %s lba: %d, pba: %d, len:%d ", __func__, lba, pba, len);
-		if (flag)
-			printf("\n %s olde.lba: %d, olde.pba: %d, olde.len:%d ", __func__, olde.lba, olde.pba, olde.len);
-		printf("\n %s e->lba: %d, e->pba: %d, e->len:%d ", __func__, e->lba, e->pba, e->len);
-		printf("\n");
-		exit(-1);
+		break;
 	}
+	/* There is no node with which this lba overlaps with */
 	if (!node) {
 		/* new node has to be added */
 		printf( "\n %s flag: %d Inserting (lba: %u pba: %u len: %d) ", __func__, flag, new->lba, new->pba, new->len);
@@ -575,8 +310,219 @@ static int lsdm_update_range(sector_t lba, sector_t pba, int len)
 			printf("\n");
 			exit(-1);
 		}
+		return;
 	}
-	printf("\n**********************\n");
+	/* We have found a "node"  that overlaps with our lba, pba,
+	 * len trio
+	 */
+
+	 /*
+	 * Case 1: overwrite a part of the existing extent
+	 * 	++++++++++
+	 * ----------------------- 
+	 *
+	 *  No end matches!!
+	 */
+
+	if ((lba > e->lba)  && (lba + len < e->lba + e->len)) {
+		printf("\n case1 ! e->lba: %d e->pba: %d e->len: %d", e->lba, e->pba, e->len);
+		split = malloc(sizeof(struct extent));
+		if (!split) {
+			free(new);
+			return -ENOMEM;
+		}
+		diff =  lba - e->lba;
+		/* new should be physically discontiguous
+		 */
+		//assert(e->pba + diff !=  pba);
+		e->len = diff;
+		ret = lsdm_rb_insert(new);
+		if (ret < 0) {
+			printf ("\n lba: %d pba: %d len: %d ", lba, pba, len);
+			printf ("\n e->lba: %d e->pba: %d e->len: %d ", e->lba, e->pba, e->len);
+			printf("\n");
+			exit(-1);
+		}
+		extent_init(split, lba + len, e->pba + (diff + len), e->len - (diff + len));
+		ret = lsdm_rb_insert(split);
+		if (ret < 0) {
+			printf("\n Corruption in case 1!! ");
+			printf ("\n lba: %d pba: %d len: %d ", lba, pba, len);
+			printf ("\n e->lba: %d e->pba: %d e->len: %d ", e->lba, e->pba, e->len);
+			printf ("\n split->lba: %d split->pba: %d split->len: %d ", split->lba, split->pba, split->len);
+			printf("\n");
+			exit(-1);
+		}
+		return 0;
+	}
+
+	/* lba overlaps with only one node, but lba + len could
+	 * overlap with potentially len nodes.
+	 * lets go to the smallest of these nodes that overlaps. This
+	 * will be found on the leftmost child */
+	left = node->rb_left;
+	if (left) {
+		while (node) {
+			left = node->rb_left;
+			if (!left)
+				break;
+			e_left= rb_entry(node, struct extent, rb);
+			/* No overlap */
+			if (lba >= (e_left->lba + e_left->len)) {
+				break;
+			}
+			node = left;
+			e = e_left;
+		}
+	} else {
+		/* the smallest node will be the parent on whose right
+		 * branch you are on or this is the smallest
+		 * overlapping node
+		 */
+		prev = lsdm_rb_prev(e);
+		while(prev) {
+			if (prev->lba + prev->len <= lba)
+				break;
+			prev = lsdm_rb_prev(e);
+			e = prev;
+		}
+	}
+
+	/* Now we consider the overlapping "e's" in an order of
+	 * increasing LBA
+	 */
+
+	/* 
+	 * Case 2: Overwrites an existing extent partially;
+	 * covers only the right portion of an existing extent (e)
+	 * 	++++++++
+	 * ----------- 
+	 *  e
+	 *
+	 *
+	 * 	++++++++
+	 * ------------- 
+	 *
+	 * (Right end of e1 and + could match!)  
+	 *
+	 */
+	if ((lba > e->lba) && ((lba + len) >= (e->lba + e->len))) {
+		e->len = lba - e->lba;
+		e = lsdm_rb_next(e);
+		/*  
+		 *  process the next overlapping segments!
+		 *  Fall through to the next case.
+		 */
+	}
+
+	/* 
+	 * Case 3: Overwrite many extents completely
+	 *	++++++++++++++++++++
+	 *	  ----- ------  --------
+	 *
+	 * Could also be exact same: 
+	 * 	+++++
+	 * 	-----
+	 * But this case is optimized in case 1.
+	 * We need to remove all such e
+	 * the last e can have case 1
+	 *
+	 * here we compare left ends and right ends of 
+	 * new and existing node e
+	 */
+	while ((e!=NULL) && (lba <= e->lba) && ((lba + len) >= (e->lba + e->len))) {
+		printf("\n case3 ! e->lba: %d e->pba: %d e->len: %d", e->lba, e->pba, e->len);
+		tmp = lsdm_rb_next(e);
+		lsdm_rb_remove(e);
+		free(e);
+		e = tmp;
+	}
+	if (!e || (e->lba >= (lba + len)))  {
+		/* No overlap with any more e */
+		ret = lsdm_rb_insert(new);
+		if (ret < 0) {
+			printf("\n Corruption in case 3!! ");
+			printf ("\n lba: %d pba: %d len: %d ", lba, pba, len);
+			printf ("\n e->lba: %d e->pba: %d e->len: %d ", e->lba, e->pba, e->len);
+			printf("\n");
+			exit(-1);
+		}
+		return 0;
+	}
+	/* else fall down to the next case for the last
+	 * component that overwrites an extent partially
+	 */
+
+	/* 
+	 * Case 4: 
+	 * Partially overwrite an extent
+	 * ++++++++++
+	 * 	-------------- OR
+	 *
+	 * Left end of + and - matches!
+	 * +++++++
+	 * --------------
+	 *
+	 */
+	if ((lba <= e->lba) && (lba + len > e->lba) && (lba + len < e->lba + e->len))  {
+		printf("\n case4 ! e->lba: %d e->pba: %d e->len: %d", e->lba, e->pba, e->len);
+		diff = lba + len - e->lba;
+		lsdm_rb_remove(e);
+		e->lba = e->lba + diff;
+		e->len = e->len - diff;
+		e->pba = e->pba + diff;
+		ret = lsdm_rb_insert(new);
+		if (ret < 0) {
+			printf("\n Corruption in case 4!! ");
+			printf ("\n lba: %d pba: %d len: %d ", lba, pba, len);
+			printf ("\n e->lba: %d e->pba: %d e->len: %d ", e->lba, e->pba, e->len);
+			printf("\n");
+			exit(-1);
+		}
+		ret = lsdm_rb_insert(e);
+		if (ret < 0) {
+			printf("\n Corruption in case 4!! ");
+			printf ("\n lba: %d pba: %d len: %d ", lba, pba, len);
+			printf ("\n e->lba: %d e->pba: %d e->len: %d ", e->lba, e->pba, e->len);
+			printf("\n");
+			exit(-1);
+		}
+		return(0);
+	}
+
+	/* Case 5:
+	 *
+	 * Right end of + and - matches.
+	 *
+	 *  		+++++++++
+	 * ----------------------
+	 */
+	if ((lba > e->lba) && (lba + len == e->lba + e->len)) {
+		printf("\n case5 ! e->lba: %d e->pba: %d e->len: %d", e->lba, e->pba, e->len);
+		diff = e->lba - lba;
+		e->len = diff;
+		ret = lsdm_rb_insert(new);
+		if (ret < 0) {
+			printf("\n Corruption in case 5!! ");
+			printf ("\n lba: %d pba: %d len: %d ", lba, pba, len);
+			printf ("\n e->lba: %d e->pba: %d e->len: %d ", e->lba, e->pba, e->len);
+			printf("\n");
+			exit(-1);
+		}
+		return(0);
+	}
+
+	/* If you are here then you haven't covered some
+	 * case!
+	 */
+	printf("\n why are you here ? flag: %d", flag);
+	printf("\n %s lba: %d, pba: %d, len:%d ", __func__, lba, pba, len);
+	if (flag)
+		printf("\n %s olde.lba: %d, olde.pba: %d, olde.len:%d ", __func__, olde.lba, olde.pba, olde.len);
+	printf("\n %s e->lba: %d, e->pba: %d, e->len:%d ", __func__, e->lba, e->pba, e->len);
+	printf("\n");
+	exit(-1);
+
 	return 0;
 }
 
