@@ -77,46 +77,6 @@ static struct extent *_stl_rb_geq(struct rb_root *root, off_t lba)
 	return higher;
 }
 
-static struct extent *stl_rb_geq(off_t lba)
-{
-	struct extent *e = NULL;
-
-	e = _stl_rb_geq(&extent_tbl_root, lba);
-	return e;
-}
-
-
-int _stl_verbose;
-static void lsdm_rb_insert(struct extent *new)
-{
-	struct rb_root *root = &extent_tbl_root;
-	struct rb_node **link = &root->rb_node, *parent = NULL;
-	struct extent *e = NULL;
-
-	RB_CLEAR_NODE(&new->rb);
-
-	/* Go to the bottom of the tree */
-	while (*link) {
-		parent = *link;
-		if (new->lba < rb_entry(parent, struct extent, rb)->lba) {
-			link = &(*link)->rb_left;
-		} else {
-			link = &(*link)->rb_right;
-		}
-	}
-	/* Put the new node there */
-	rb_link_node(&new->rb, parent, link);
-	rb_insert_color(&new->rb, root);
-}
-
-static void lsdm_rb_remove(struct extent *e)
-{
-	struct rb_root *root = &extent_tbl_root;
-	rb_erase(&e->rb, root);
-	n_extents--;
-}
-
-
 static struct extent *lsdm_rb_next(struct extent *e)
 {
 	struct rb_node *node = rb_next(&e->rb);
@@ -127,6 +87,105 @@ static struct extent *lsdm_rb_prev(struct extent *e)
 {
         struct rb_node *node = rb_prev(&e->rb);
         return (node == NULL) ? NULL : container_of(node, struct extent, rb);
+}
+
+
+
+
+static struct extent *stl_rb_geq(off_t lba)
+{
+	struct extent *e = NULL;
+
+	e = _stl_rb_geq(&extent_tbl_root, lba);
+	return e;
+}
+
+
+static int check_node_contents(struct rb_node *node)
+{
+	int ret = 0;
+	struct extent *e, *next, *prev;
+
+	if (!node)
+		return -1;
+
+	e = rb_entry(node, struct extent, rb);
+
+	if (e->lba < 0) {
+		printf("\n LBA is <=0, tree corrupt!! \n");
+		return -1;
+	}
+	if (e->pba <= 0) {
+		printf("\n PBA is <=0, tree corrupt!! \n");
+		return -1;
+	}
+	if (e->len <= 0) {
+		printf("\n len is <=0, tree corrupt!! \n");
+		return -1;
+	}
+
+	next = lsdm_rb_next(node);
+	prev = lsdm_rb_prev(node);
+
+	if (next  && next->lba == e->lba) {
+		printf("\n LBA corruption (next) ! lba: %d is present in two nodes!", next->lba);
+		printf("\n next->lba: %d next->pba: %d next->len: %d", next->lba, next->pba, next->len);
+		return -1;
+	}
+
+	if (next && e->lba + e->len == next->lba) {
+		if (e->pba + e->len == next->pba) {
+			printf("\n Nodes not merged! ");
+			printf("\n e->lba: %d e->pba: %d e->len: %d", e->lba, e->pba, e->len);
+			printf("\n next->lba: %d next->pba: %d next->len: %d", next->lba, next->pba, next->len);
+			return -1;
+		}
+	}
+
+	if (prev && prev->lba == e->lba) {
+		printf("\n LBA corruption (prev)! lba: %d is present in two nodes!", prev->lba);
+		return -1;
+	}
+
+	if (prev && prev->lba + prev->len == e->lba) {
+		if (prev->pba + prev->len == e->pba) {
+			printf("\n Nodes not merged! ");
+			printf("\n e->lba: %d e->pba: %d e->len: %d", e->lba, e->pba, e->len);
+			printf("\n prev->lba: %d prev->pba: %d prev->len: %d", prev->lba, prev->pba, prev->len);
+			return -1;
+
+		}
+	}
+
+	if(node->rb_left)
+		ret = check_node_contents(node->rb_left);
+
+	if (ret < 0)
+		return ret;
+
+	if (node->rb_right)
+		ret = check_node_contents(node->rb_right);
+
+	return ret;
+
+}
+
+static int lsdm_tree_check()
+{
+	struct rb_node *node = extent_tbl_root.rb_node;
+	int ret = 0;
+
+	ret = check_node_contents(node);
+	printf("\n");
+	return ret;
+
+}
+
+static void lsdm_rb_remove(struct extent *e)
+{
+	struct rb_root *root = &extent_tbl_root;
+	rb_erase(&e->rb, root);
+	n_extents--;
 }
 
 /* Check if we can be merged with the left or the right node */
@@ -145,6 +204,7 @@ static struct extent *merge(struct extent *e)
 				e = prev;
 			}
 		}
+
 	}
 	if (next) {
 		if (next->lba == e->lba + e->len) {
@@ -157,16 +217,54 @@ static struct extent *merge(struct extent *e)
 	}
 }
 
+
+
+
+int _stl_verbose;
+static int lsdm_rb_insert(struct extent *new)
+{
+	struct rb_root *root = &extent_tbl_root;
+	struct rb_node **link = &root->rb_node, *parent = NULL;
+	struct extent *e = NULL;
+	int ret = 0;
+
+	RB_CLEAR_NODE(&new->rb);
+
+	/* Go to the bottom of the tree */
+	while (*link) {
+		parent = *link;
+		if (new->lba < rb_entry(parent, struct extent, rb)->lba) {
+			link = &(*link)->rb_left;
+		} else {
+			link = &(*link)->rb_right;
+		}
+	}
+	/* Put the new node there */
+	rb_link_node(&new->rb, parent, link);
+	rb_insert_color(&new->rb, root);
+	merge(new);
+	ret = lsdm_tree_check();
+	if (ret < 0) {
+		printf("\n !!!! Corruption while Inserting: lba: %d pba: %d len: %d", new->lba, new->pba, new->len);
+		return -1;
+	}
+	return 0;
+}
+
+
 /* Update mapping. Removes any total overlaps, edits any partial
  * overlaps, adds new extent to map.
  */
-static int lsdm_update_range(sector_t lba, sector_t pba, size_t len)
+static int lsdm_update_range(sector_t lba, sector_t pba, int len)
 {
 	struct extent *e = NULL, *new = NULL, *split = NULL, *next=NULL, *prev=NULL;
 	struct extent *tmp = NULL;
 	struct rb_node *node = extent_tbl_root.rb_node;  /* top of the tree */
 	int diff = 0;
 	int i=0;
+	int ret=0;
+	int flag = 0;
+	struct extent olde;
 
 	assert(len != 0);
 
@@ -179,8 +277,8 @@ static int lsdm_update_range(sector_t lba, sector_t pba, size_t len)
 	while (node) {
 		i++;
 		if (i==150) {
-			printf("\n why are you here ?");
-			printf("\n %s lba: %d, pba: %d, len:%ld ", __func__, lba, pba, len);
+			printf("\n stuck in a while loop, why are you here ?");
+			printf("\n %s lba: %d, pba: %d, len:%d ", __func__, lba, pba, len);
 			printf("\n %s e->lba: %d, e->pba: %d, e->len:%d ", __func__, e->lba, e->pba, e->len);
 			printf("\n");
 			exit(-1);
@@ -195,6 +293,7 @@ static int lsdm_update_range(sector_t lba, sector_t pba, size_t len)
 			node = node->rb_right;
 			continue;
 		}
+		printf("\n Here! e->lba: %d e->pba: %d e->len: %d", e->lba, e->pba, e->len);
 
 		 /*
 		 * Case 1: overwrite a part of the existing extent
@@ -205,6 +304,7 @@ static int lsdm_update_range(sector_t lba, sector_t pba, size_t len)
 		 */
 
 		if ((lba > e->lba)  && (lba + len < e->lba + e->len)) {
+			printf("\n case1 ! e->lba: %d e->pba: %d e->len: %d", e->lba, e->pba, e->len);
 			split = malloc(sizeof(struct extent));
 			if (!split) {
 				free(new);
@@ -215,9 +315,24 @@ static int lsdm_update_range(sector_t lba, sector_t pba, size_t len)
 			 */
 			//assert(e->pba + diff !=  pba);
 			e->len = diff;
-			lsdm_rb_insert(new);
+			ret = lsdm_rb_insert(new);
+			if (ret < 0) {
+				printf ("\n lba: %d pba: %d len: %d ", lba, pba, len);
+				printf ("\n e->lba: %d e->pba: %d e->len: %d ", e->lba, e->pba, e->len);
+				printf("\n");
+				exit(-1);
+			}
 			extent_init(split, lba + len, e->pba + (diff + len), e->len - (diff + len));
-			lsdm_rb_insert(split);
+			ret = lsdm_rb_insert(split);
+			if (ret < 0) {
+				printf("\n Corruption in case 1!! ");
+				printf ("\n lba: %d pba: %d len: %d ", lba, pba, len);
+				printf ("\n e->lba: %d e->pba: %d e->len: %d ", e->lba, e->pba, e->len);
+				printf ("\n split->lba: %d split->pba: %d split->len: %d ", split->lba, split->pba, split->len);
+				printf("\n");
+				exit(-1);
+			}
+
 			break;
 		}
 
@@ -233,9 +348,20 @@ static int lsdm_update_range(sector_t lba, sector_t pba, size_t len)
 		 *
 		 */
 		if ((lba > e->lba) && (lba < e->lba + e->len)) {
+			printf("\n case2 ! e->lba: %d e->pba: %d e->len: %d", e->lba, e->pba, e->len);
 			diff = (e->lba + e->len) - lba;
+			printf("\n diff: %d ", diff);
+			printf("\n lba: %d, len: %d  e->lba: %d e->len: %d", lba, len, e->lba, e->len);
+			memcpy(&olde, e, sizeof(struct extent));
+			printf("\n e->len: %d ,  diff: %d", e->len, diff);
 			e->len = e->len - diff;
+			printf("\n lba: %d, len: %d  e->lba: %d e->len: %d", lba, len, e->lba, e->len);
 			e = lsdm_rb_next(e);
+			printf("\n lba: %d, len: %d  e->lba: %d e->len: %d", lba, len, e->lba, e->len);
+			e = lsdm_rb_prev(e);
+			printf("\n lba: %d, len: %d  e->lba: %d e->len: %d", lba, len, e->lba, e->len);
+			e = lsdm_rb_next(e);
+			flag = 1;
 			/*  
 			 *  process the next overlapping segments!
 			 *  Fall through to the next case.
@@ -286,14 +412,21 @@ static int lsdm_update_range(sector_t lba, sector_t pba, size_t len)
 		 * new and existing node e
 		 */
 		while ((e!=NULL) && (lba <= e->lba) && ((lba + len) >= (e->lba + e->len))) {
+			printf("\n case3 ! e->lba: %d e->pba: %d e->len: %d", e->lba, e->pba, e->len);
 			tmp = lsdm_rb_next(e);
 			lsdm_rb_remove(e);
 			free(e);
 			e = tmp;
 		}
 		if (!e || (e->lba > lba + len))  {
-			lsdm_rb_insert(new);
-			merge(new);
+			ret = lsdm_rb_insert(new);
+			if (ret < 0) {
+				printf("\n Corruption in case 3!! ");
+				printf ("\n lba: %d pba: %d len: %d ", lba, pba, len);
+				printf ("\n e->lba: %d e->pba: %d e->len: %d ", e->lba, e->pba, e->len);
+				printf("\n");
+				exit(-1);
+			}
 			break;
 		}
 		/* else fall down to the next case for the last
@@ -312,70 +445,138 @@ static int lsdm_update_range(sector_t lba, sector_t pba, size_t len)
 		 *
 		 */
 		if ((lba <= e->lba) && (lba + len > e->lba)) {
+			printf("\n case4 ! e->lba: %d e->pba: %d e->len: %d", e->lba, e->pba, e->len);
 			diff = lba + len - e->lba;
 			lsdm_rb_remove(e);
 			e->lba = e->lba + diff;
 			e->len = e->len - diff;
 			e->pba = e->pba + diff;
-			lsdm_rb_insert(new);
-			lsdm_rb_insert(e);
-			merge(new);
+			ret = lsdm_rb_insert(new);
+			if (ret < 0) {
+				printf("\n Corruption in case 4!! ");
+				printf ("\n lba: %d pba: %d len: %d ", lba, pba, len);
+				printf ("\n e->lba: %d e->pba: %d e->len: %d ", e->lba, e->pba, e->len);
+				printf("\n");
+				exit(-1);
+			}
+			ret = lsdm_rb_insert(e);
+			if (ret < 0) {
+				printf("\n Corruption in case 4!! ");
+				printf ("\n lba: %d pba: %d len: %d ", lba, pba, len);
+				printf ("\n e->lba: %d e->pba: %d e->len: %d ", e->lba, e->pba, e->len);
+				printf("\n");
+				exit(-1);
+			}
 			break;
 		}
 
-		/* Case 5 
+		/* Case 5:
+		 *
+		 * Right end of + and - matches.
+		 *
+		 *  		+++++++++
+		 * ----------------------
+		 */
+		if ((lba > e->lba) && (lba + len == e->lba + e->len)) {
+			printf("\n case5 ! e->lba: %d e->pba: %d e->len: %d", e->lba, e->pba, e->len);
+			diff = e->lba - lba;
+			e->len = diff;
+			ret = lsdm_rb_insert(new);
+			if (ret < 0) {
+				printf("\n Corruption in case 5!! ");
+				printf ("\n lba: %d pba: %d len: %d ", lba, pba, len);
+				printf ("\n e->lba: %d e->pba: %d e->len: %d ", e->lba, e->pba, e->len);
+				printf("\n");
+				exit(-1);
+			}
+			break;
+		}
+
+		/* Case 6 
 		 * 	    +++++++++
 		 * ---------
 		 *  Right end of - matches left end of +
 		 *  Merge if the pba matches.
 		 */
 		if (e->lba + e->len == lba) {
+			printf("\n case6 ! e->lba: %d e->pba: %d e->len: %d", e->lba, e->pba, e->len);
 			if(e->pba + e->len == pba) {
 				e->len += len;
 				free(new);
 				break;
 			}
 			// else
-			lsdm_rb_insert(new);
-			merge(new);
+			ret = lsdm_rb_insert(new);
+			if (ret < 0) {
+				printf("\n Corruption in case 6!! ");
+				printf ("\n lba: %d pba: %d len: %d ", lba, pba, len);
+				printf ("\n e->lba: %d e->pba: %d e->len: %d ", e->lba, e->pba, e->len);
+				printf("\n");
+				exit(-1);
+			}
 			break;
 		}
 
-		/* Case 6
+		/* Case 7
 		 *
 		 * Left end of - matches with right end of +
 		 * +++++++
 		 *        ---------
 		 */
 		if (lba + len == e->lba) {
+			printf("\n case7 ! e->lba: %d e->pba: %d e->len: %d", e->lba, e->pba, e->len);
 			if (pba + len == e->pba) {
 				len += e->len;
 				lsdm_rb_remove(e);
 				e->lba = lba;
 				e->pba = pba;
 				e->len = len;
-				lsdm_rb_insert(e);
+				ret = lsdm_rb_insert(e);
+				if (ret < 0) {
+					printf("\n Corruption in case 7.1!! ");
+					printf ("\n lba: %d pba: %d len: %d ", lba, pba, len);
+					printf ("\n e->lba: %d e->pba: %d e->len: %d ", e->lba, e->pba, e->len);
+					printf("\n");
+					exit(-1);
+				}
 				break;
 			}
 			// else
-			lsdm_rb_insert(new);
-			merge(new);
+			ret = lsdm_rb_insert(new);
+			if (ret < 0) {
+				printf("\n Corruption in case 7.2!! ");
+				printf ("\n lba: %d pba: %d len: %d ", lba, pba, len);
+				printf ("\n e->lba: %d e->pba: %d e->len: %d ", e->lba, e->pba, e->len);
+				printf("\n");
+				exit(-1);
+			}
 			break;
 		}
 		/* If you are here then you haven't covered some
 		 * case!
 		 */
-		printf("\n why are you here ?");
-		printf("\n %s lba: %d, pba: %d, len:%ld ", __func__, lba, pba, len);
+		printf("\n why are you here ? flag: %d", flag);
+		printf("\n %s lba: %d, pba: %d, len:%d ", __func__, lba, pba, len);
+		if (flag)
+			printf("\n %s olde.lba: %d, olde.pba: %d, olde.len:%d ", __func__, olde.lba, olde.pba, olde.len);
 		printf("\n %s e->lba: %d, e->pba: %d, e->len:%d ", __func__, e->lba, e->pba, e->len);
 		printf("\n");
 		exit(-1);
 	}
 	if (!node) {
 		/* new node has to be added */
-		lsdm_rb_insert(new);
-		//printk( "\n %s Inserted (lba: %u pba: %u len: %d) ", __func__, new->lba, new->pba, new->len);
+		printf( "\n %s flag: %d Inserting (lba: %u pba: %u len: %d) ", __func__, flag, new->lba, new->pba, new->len);
+		printf("\n----------------- \n");
+		ret = lsdm_rb_insert(new);
+		if (ret < 0) {
+			printf("\n Corruption in case 8!! ");
+			printf ("\n lba: %d pba: %d len: %d ", lba, pba, len);
+			printf ("\n e->lba: %d e->pba: %d e->len: %d ", e->lba, e->pba, e->len);
+			printf("\n");
+			exit(-1);
+		}
 	}
+	printf("\n**********************\n");
 	return 0;
 }
 
@@ -477,13 +678,13 @@ static void check_augmented(int nr_nodes)
 	}
 }
 
-#define NUM 1066
+#define NUM 3051
 
 void overwrite()
 {
 	for(int i=0; i<NUM; i++) {
 		//printf("\n %d %d %d ", trio[i][0], trio[i][1], trio[i][2]);
-		lsdm_update_range(trio[i][0], trio[i][1], trio[i][2]);
+		lsdm_update_range(replace[i][0], replace[i][1], replace[i][2]);
 	}
 	start_printing();
 }
@@ -497,8 +698,24 @@ int main(void)
 	printf("rbtree testing\n");
 
 	for(i=0; i<NUM; i++) {
+		if (replace[i][0] < 0) {
+			printf("\n LBA is indeed < 0");
+			exit(-1);
+		}
+		if (replace[i][1] <= 0) {
+			printf("\n PBA is indeed < 0");
+			exit(-1);
+		}
+		if (replace[i][2] <= 0) {
+			printf("\n len is indeed < 0");
+			exit(-1);
+		}
+
+	}
+
+	for(i=0; i<NUM; i++) {
 		//printf("\n %d %d %d ", trio[i][0], trio[i][1], trio[i][2]);
-		lsdm_update_range(trio[i][0], trio[i][1], trio[i][2]);
+		lsdm_update_range(replace[i][0], replace[i][1], replace[i][2]);
 	}
 	start_printing();
 	getchar();
