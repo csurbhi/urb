@@ -375,36 +375,13 @@ static int lsdm_update_range(sector_t lba, sector_t pba, int len)
 		return 0;
 	}
 
-	/* lba overlaps with only one node, but lba + len could
-	 * overlap with potentially len nodes.
-	 * lets go to the smallest of these nodes that overlaps. This
-	 * will be found on the leftmost child */
-	left = node->rb_left;
-	if (left) {
-		while (node) {
-			left = node->rb_left;
-			if (!left)
-				break;
-			e_left= rb_entry(node, struct extent, rb);
-			/* No overlap */
-			if (lba >= (e_left->lba + e_left->len)) {
-				break;
-			}
-			node = left;
-			e = e_left;
-		}
-	} else {
-		/* the smallest node will be the parent on whose right
-		 * branch you are on or this is the smallest
-		 * overlapping node
-		 */
+	/* Start from the smallest node that overlaps*/
+	prev = lsdm_rb_prev(e);
+	while(prev) {
+		if (prev->lba + prev->len <= lba)
+			break;
 		prev = lsdm_rb_prev(e);
-		while(prev) {
-			if (prev->lba + prev->len <= lba)
-				break;
-			prev = lsdm_rb_prev(e);
-			e = prev;
-		}
+		e = prev;
 	}
 
 	/* Now we consider the overlapping "e's" in an order of
