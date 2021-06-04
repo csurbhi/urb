@@ -115,7 +115,7 @@ static int check_node_contents(struct rb_node *node)
 		printf("\n LBA is <=0, tree corrupt!! \n");
 		return -1;
 	}
-	if (e->pba <= 0) {
+	if (e->pba < 0) {
 		printf("\n PBA is <=0, tree corrupt!! \n");
 		return -1;
 	}
@@ -124,8 +124,8 @@ static int check_node_contents(struct rb_node *node)
 		return -1;
 	}
 
-	next = lsdm_rb_next(node);
-	prev = lsdm_rb_prev(node);
+	next = lsdm_rb_next(e);
+	prev = lsdm_rb_prev(e);
 
 	if (next  && next->lba == e->lba) {
 		printf("\n LBA corruption (next) ! lba: %d is present in two nodes!", next->lba);
@@ -180,6 +180,7 @@ static int lsdm_tree_check()
 	return ret;
 
 }
+
 
 static void lsdm_rb_remove(struct extent *e)
 {
@@ -318,14 +319,6 @@ static int lsdm_update_range(sector_t lba, sector_t pba, int len)
 	}
 	extent_init(new, lba, pba, len);
 	while (node) {
-		i++;
-		if (i==150) {
-			printf("\n stuck in a while loop, why are you here ?");
-			printf("\n %s lba: %d, pba: %d, len:%d ", __func__, lba, pba, len);
-			printf("\n %s e->lba: %d, e->pba: %d, e->len:%d ", __func__, e->lba, e->pba, e->len);
-			printf("\n");
-			exit(-1);
-		}
 		e = rb_entry(node, struct extent, rb);
 		/* No overlap */
 		if ((lba + len) <= e->lba) {
@@ -351,7 +344,7 @@ static int lsdm_update_range(sector_t lba, sector_t pba, int len)
 			printf("\n");
 			exit(-1);
 		}
-		return;
+		return(0);
 	}
 	/* We have found a "node"  that overlaps with our lba, pba,
 	 * len trio
@@ -373,6 +366,8 @@ static int lsdm_update_range(sector_t lba, sector_t pba, int len)
 			return -ENOMEM;
 		}
 		diff =  lba - e->lba;
+		/* Initialize split before e->len changes!! */
+		extent_init(split, lba + len, e->pba + (diff + len), e->len - (diff + len));
 		/* new should be physically discontiguous
 		 */
 		//assert(e->pba + diff !=  pba);
@@ -384,7 +379,6 @@ static int lsdm_update_range(sector_t lba, sector_t pba, int len)
 			printf("\n");
 			exit(-1);
 		}
-		extent_init(split, lba + len, e->pba + (diff + len), e->len - (diff + len));
 		ret = lsdm_rb_insert(split);
 		if (ret < 0) {
 			printf("\n Corruption in case 1!! ");
@@ -623,13 +617,15 @@ static void check_augmented(int nr_nodes)
 	}
 }
 
-#define NUM 3051
+//#define NUM 3051
+//
+#define NUM 1964
 
 void overwrite()
 {
 	for(int i=0; i<NUM; i++) {
 		//printf("\n %d %d %d ", trio[i][0], trio[i][1], trio[i][2]);
-		lsdm_update_range(replace[i][0], replace[i][1], replace[i][2]);
+		lsdm_update_range(replace[i][1], replace[i][0], replace[i][2]);
 	}
 	start_printing();
 }
@@ -660,7 +656,7 @@ int main(void)
 
 	for(i=0; i<NUM; i++) {
 		//printf("\n %d %d %d ", trio[i][0], trio[i][1], trio[i][2]);
-		lsdm_update_range(replace[i][0], replace[i][1], replace[i][2]);
+		lsdm_update_range(new[i][1], new[i][0], new[i][2]);
 	}
 	start_printing();
 	getchar();
